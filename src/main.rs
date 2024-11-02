@@ -1,12 +1,14 @@
+use quadtree::{Locatable, Point, QuadTree, Rect};
 use rand::Rng;
 use rhai::packages::Package; // needed for 'Package' trait
 use rhai::{CustomType, Engine, EvalAltResult, TypeBuilder};
 use rhai_rand::RandomPackage;
-use std::collections::HashMap;
-use std::f64::consts::PI;
+use std::f32::consts::PI;
 use uuid::Uuid;
 
-const BOX_SIZE: f64 = 300.;
+mod quadtree;
+
+const BOX_SIZE: f32 = 300.;
 
 #[derive(Debug, Clone, CustomType)]
 #[rhai_type(extra = Self::build_extra)]
@@ -38,16 +40,16 @@ impl eframe::App for World {
         _ = self.update(0.1);
         egui::CentralPanel::default().show(ctx, |ui| {
             let painter = ui.painter();
-            for microbe in self.microbes.values() {
+            for microbe in self.microbes.items() {
                 let player_pos = egui::pos2(
-                    microbe.transform.position.x as f32 + BOX_SIZE as f32 + 10.,
-                    microbe.transform.position.y as f32 + BOX_SIZE as f32 + 10.,
+                    microbe.transform.position.x + BOX_SIZE + 10.,
+                    microbe.transform.position.y + BOX_SIZE + 10.,
                 );
                 painter.circle_filled(player_pos, 3.0, egui::Color32::WHITE);
 
                 let direction = egui::vec2(
-                    microbe.transform.rotation.cos() as f32,
-                    microbe.transform.rotation.sin() as f32,
+                    microbe.transform.rotation.cos(),
+                    microbe.transform.rotation.sin(),
                 );
                 let line_end = player_pos + direction * 3.0;
                 painter.line_segment(
@@ -60,21 +62,20 @@ impl eframe::App for World {
     }
 }
 
-// Position and movement related structs
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Vector2 {
-    x: f64,
-    y: f64,
+    x: f32,
+    y: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Transform {
     position: Vector2,
-    rotation: f64,
+    rotation: f32,
 }
 
 impl Transform {
-    fn new(x: f64, y: f64, rotation: f64) -> Self {
+    fn new(x: f32, y: f32, rotation: f32) -> Self {
         Self {
             position: Vector2 { x, y },
             rotation,
@@ -82,18 +83,23 @@ impl Transform {
     }
 }
 
-// Main microbe struct
 #[derive(Debug, Clone, PartialEq)]
 struct Microbe {
     id: Uuid,
     transform: Transform,
     script: String,
-    energy: f64,
+    energy: f32,
     age: u32,
 }
 
+impl Locatable for Microbe {
+    fn location(&self) -> Point {
+        Point::new(self.transform.position.x, self.transform.position.y)
+    }
+}
+
 impl Microbe {
-    fn new(x: f64, y: f64, rotation: f64, script: String) -> Self {
+    fn new(x: f32, y: f32, rotation: f32, script: String) -> Self {
         Self {
             id: Uuid::new_v4(),
             transform: Transform::new(x, y, rotation),
@@ -103,7 +109,7 @@ impl Microbe {
         }
     }
 
-    fn update(&mut self, controls: &Controls, delta_time: f64) {
+    fn update(&mut self, controls: &Controls, delta_time: f32) {
         // Apply controls to movement
         let speed = SPEED * delta_time;
 
@@ -135,14 +141,16 @@ impl Microbe {
     }
 }
 
-const SPEED: f64 = 30.0;
-const ROTATION_SPEED: f64 = 10.;
+const SPEED: f32 = 30.0;
+const ROTATION_SPEED: f32 = 10.;
+const DETECT_RANGE_FAR: f32 = 20.;
+const DETECT_RANGE_CLOSE: f32 = 5.;
 
 #[derive(Debug)]
 struct World {
-    microbes: HashMap<Uuid, Microbe>,
+    microbes: QuadTree<Microbe>,
     engine: Engine,
-    time: f64,
+    time: f32,
 }
 
 impl World {
@@ -152,35 +160,38 @@ impl World {
         let random = RandomPackage::new();
 
         random.register_into_engine(&mut engine);
-
         Ok(Self {
-            microbes: HashMap::new(),
+            microbes: QuadTree::new(
+                Rect::new(-BOX_SIZE, -BOX_SIZE, BOX_SIZE * 2., BOX_SIZE * 2.),
+                10,
+            ),
             engine,
             time: 0.0,
         })
     }
 
-    fn add_microbe(&mut self, x: f64, y: f64, rotation: f64, script: String) -> Uuid {
+    fn add_microbe(&mut self, x: f32, y: f32, rotation: f32, script: String) -> Uuid {
         let microbe = Microbe::new(x, y, rotation, script);
         let id = microbe.id;
-        self.microbes.insert(id, microbe);
+        assert!(self.microbes.insert(microbe));
         id
     }
 
-    fn update(&mut self, delta_time: f64) -> Result<(), Box<EvalAltResult>> {
+    fn update(&mut self, delta_time: f32) -> Result<(), Box<EvalAltResult>> {
         self.time += delta_time;
 
-        let microbe_ids: Vec<Uuid> = self.microbes.keys().cloned().collect();
+        let mut result =
+            QuadTree::<Microbe>::new(self.microbes.root.bounds, self.microbes.root.capacity);
+        for microbe in self.microbes.items() {
+            let transform = microbe.transform;
+            let mut microbe = microbe.clone();
 
-        for id in microbe_ids {
-            let transform = self.microbes.get(&id).unwrap().transform;
-
-            let close_range = 10.;
-            let far_range = 60.;
+            let close_range = DETECT_RANGE_CLOSE;
+            let far_range = DETECT_RANGE_FAR;
 
             let microbes_forward_close = World::get_nearby_microbes(
                 &self.microbes,
-                id,
+                microbe.id,
                 transform.position,
                 transform.rotation,
                 close_range,
@@ -188,7 +199,7 @@ impl World {
             .len() as i64;
             let microbes_left_close = World::get_nearby_microbes(
                 &self.microbes,
-                id,
+                microbe.id,
                 transform.position,
                 transform.rotation - (PI * 0.5),
                 close_range,
@@ -196,7 +207,7 @@ impl World {
             .len() as i64;
             let microbes_right_close = World::get_nearby_microbes(
                 &self.microbes,
-                id,
+                microbe.id,
                 transform.position,
                 transform.rotation + (PI * 0.5),
                 close_range,
@@ -204,7 +215,7 @@ impl World {
             .len() as i64;
             let microbes_backward_close = World::get_nearby_microbes(
                 &self.microbes,
-                id,
+                microbe.id,
                 transform.position,
                 transform.rotation + PI,
                 close_range,
@@ -213,7 +224,7 @@ impl World {
 
             let microbes_forward_far = World::get_nearby_microbes(
                 &self.microbes,
-                id,
+                microbe.id,
                 transform.position,
                 transform.rotation,
                 far_range,
@@ -221,7 +232,7 @@ impl World {
             .len() as i64;
             let microbes_left_far = World::get_nearby_microbes(
                 &self.microbes,
-                id,
+                microbe.id,
                 transform.position,
                 transform.rotation - (PI * 0.5),
                 far_range,
@@ -229,7 +240,7 @@ impl World {
             .len() as i64;
             let microbes_right_far = World::get_nearby_microbes(
                 &self.microbes,
-                id,
+                microbe.id,
                 transform.position,
                 transform.rotation + (PI * 0.5),
                 far_range,
@@ -237,7 +248,7 @@ impl World {
             .len() as i64;
             let microbes_backward_far = World::get_nearby_microbes(
                 &self.microbes,
-                id,
+                microbe.id,
                 transform.position,
                 transform.rotation + PI,
                 far_range,
@@ -254,51 +265,55 @@ impl World {
             let microbes_right_far = move || microbes_right_far;
             let microbes_backward_far = move || microbes_backward_far;
 
-            if let Some(microbe) = self.microbes.get_mut(&id) {
-                self.engine
-                    .register_fn("microbes_forward_close", microbes_forward_close);
-                self.engine
-                    .register_fn("microbes_left_close", microbes_left_close);
-                self.engine
-                    .register_fn("microbes_right_close", microbes_right_close);
-                self.engine
-                    .register_fn("microbes_backward_close", microbes_backward_close);
+            self.engine
+                .register_fn("microbes_forward_close", microbes_forward_close);
+            self.engine
+                .register_fn("microbes_left_close", microbes_left_close);
+            self.engine
+                .register_fn("microbes_right_close", microbes_right_close);
+            self.engine
+                .register_fn("microbes_backward_close", microbes_backward_close);
 
-                self.engine
-                    .register_fn("microbes_forward_far", microbes_forward_far);
-                self.engine
-                    .register_fn("microbes_left_far", microbes_left_far);
-                self.engine
-                    .register_fn("microbes_right_far", microbes_right_far);
-                self.engine
-                    .register_fn("microbes_backward_far", microbes_backward_far);
+            self.engine
+                .register_fn("microbes_forward_far", microbes_forward_far);
+            self.engine
+                .register_fn("microbes_left_far", microbes_left_far);
+            self.engine
+                .register_fn("microbes_right_far", microbes_right_far);
+            self.engine
+                .register_fn("microbes_backward_far", microbes_backward_far);
 
-                let controls = self.engine.eval::<Controls>(&microbe.script).expect("msg");
+            let controls = self.engine.eval::<Controls>(&microbe.script).expect("msg");
 
-                microbe.update(&controls, delta_time);
+            microbe.update(&controls, delta_time);
 
-                microbe.transform.position.x =
-                    microbe.transform.position.x.clamp(-BOX_SIZE, BOX_SIZE);
-                microbe.transform.position.y =
-                    microbe.transform.position.y.clamp(-BOX_SIZE, BOX_SIZE);
+            microbe.transform.position.x = microbe.transform.position.x.clamp(-BOX_SIZE, BOX_SIZE);
+            microbe.transform.position.y = microbe.transform.position.y.clamp(-BOX_SIZE, BOX_SIZE);
 
-                // if microbe.energy <= 0.0 {
-                //     self.microbes.remove(&id);
-                // }
-            }
+            result.insert(microbe);
+            // if microbe.energy <= 0.0 {
+            //     self.microbes.remove(&id);
+            // }
         }
+        self.microbes = result;
         Ok(())
     }
 
     fn get_nearby_microbes(
-        microbes: &HashMap<Uuid, Microbe>,
+        microbes: &QuadTree<Microbe>,
         id: Uuid,
         position: Vector2,
-        angle: f64,
-        range: f64,
+        angle: f32,
+        range: f32,
     ) -> Vec<&Microbe> {
         microbes
-            .values()
+            .query(&Rect::new(
+                position.x - range * 0.5,
+                position.y - range * 0.5,
+                range,
+                range,
+            ))
+            .into_iter()
             .filter(|m| {
                 if id == m.id {
                     return false;
@@ -324,8 +339,8 @@ fn main() -> eframe::Result {
     let mut world = World::new().unwrap();
 
     let mut rng = rand::thread_rng();
-    for _ in 0..800 {
-        if rng.gen_bool(0.1) {
+    for _ in 0..2000 {
+        if rng.gen_bool(0.01) {
             world.add_microbe(
                 rng.gen_range(-BOX_SIZE..BOX_SIZE),
                 rng.gen_range(-BOX_SIZE..BOX_SIZE),
@@ -408,19 +423,17 @@ fn random_script() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use uuid::Uuid;
 
     #[test]
     fn test_get_nearby_microbes() {
-        // Set up test data
-        let mut microbes = HashMap::new();
+        let mut microbes = QuadTree::new(Rect::new(-3., -3., 3., 3.), 10);
 
-        fn assert_detected(angle: f64, m: Microbe, ms: &mut HashMap<Uuid, Microbe>) {
+        fn assert_detected(angle: f32, m: Microbe, ms: &mut QuadTree<Microbe>) {
             let position = Vector2 { x: 0.0, y: 0.0 };
             let range = 10.0;
             let id = Uuid::new_v4();
-            ms.insert(m.id, m.clone());
+            ms.insert(m.clone());
             assert!(World::get_nearby_microbes(ms, id, position, angle, range).contains(&&m));
         }
 
