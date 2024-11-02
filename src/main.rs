@@ -11,19 +11,19 @@ const BOX_SIZE: f64 = 300.;
 #[derive(Debug, Clone, CustomType)]
 #[rhai_type(extra = Self::build_extra)]
 struct Controls {
-    right: i64,
-    left: i64,
-    forward: i64,
-    back: i64,
+    right: bool,
+    left: bool,
+    forward: bool,
+    back: bool,
 }
 
 impl Controls {
     pub fn new() -> Self {
         Self {
-            right: 0,
-            left: 0,
-            forward: 0,
-            back: 0,
+            right: false,
+            left: false,
+            forward: false,
+            back: false,
         }
     }
     fn build_extra(builder: &mut TypeBuilder<Self>) {
@@ -108,21 +108,21 @@ impl Microbe {
         let speed = SPEED * delta_time;
 
         // Update position based on controls
-        if controls.forward > 0 {
+        if controls.forward {
             self.transform.position.x += self.transform.rotation.cos() * speed;
             self.transform.position.y += self.transform.rotation.sin() * speed;
         }
-        if controls.back > 0 {
+        if controls.back {
             self.transform.position.x -= self.transform.rotation.cos() * speed;
             self.transform.position.y -= self.transform.rotation.sin() * speed;
         }
 
         // Update rotation based on controls
         let rotation_speed = ROTATION_SPEED * delta_time;
-        if controls.right > 0 {
+        if controls.right {
             self.transform.rotation += rotation_speed;
         }
-        if controls.left > 0 {
+        if controls.left {
             self.transform.rotation -= rotation_speed;
         }
 
@@ -320,7 +320,6 @@ impl World {
     }
 }
 
-// Example usage
 fn main() -> eframe::Result {
     let mut world = World::new().unwrap();
 
@@ -366,23 +365,23 @@ fn aggressive_hunter_script() -> String {
         // Periodically turn to search
         if rand(0..=100) > 95 {
             if rand(0..=1) > 0.5 {
-                controls.right = 1;
+                controls.right = true;
             } else {
-                controls.left = 1;
+                controls.left = true;
             }
         }
         if front_far > 0 {
-            controls.forward = 1;
+            controls.forward = true;
         }
 
         if left_far > 0 {
-            controls.left = 1;
-            controls.forward = 1;
+            controls.left = true;
+            controls.forward = true;
         }
         else
         if right_far > 0 {
-            controls.right = 1;
-            controls.forward = 1;
+            controls.right = true;
+            controls.forward = true;
         }
 
         return controls;
@@ -395,11 +394,11 @@ fn random_script() -> String {
         let controls = new_controls();
 
         if rand(0..=1) > 0.5 {
-            controls.right = 1;
+            controls.right = true;
         } else {
-            controls.left = 1;
+            controls.left = true;
         }
-        controls.forward = 1;
+        controls.forward = true;
 
         return controls;
     "#
