@@ -46,8 +46,8 @@ impl eframe::App for World {
             let painter = ui.painter();
             for microbe in self.microbes.items() {
                 let player_pos = egui::pos2(
-                    microbe.transform.position.x + BOX_SIZE + 10.,
-                    microbe.transform.position.y + BOX_SIZE + 10.,
+                    microbe.transform.position.x + BOX_SIZE,
+                    microbe.transform.position.y + BOX_SIZE,
                 );
                 let size = (microbe.energy / (HEALTH * 2.)) + 1.;
                 painter.circle_filled(player_pos, size, microbe.color);
@@ -93,7 +93,7 @@ struct Microbe {
     id: Uuid,
     lineage: Uuid,
     transform: Transform,
-    script: String,
+    script_id: Uuid,
     energy: f32,
     color: Color32,
 }
@@ -105,12 +105,12 @@ impl Locatable for Microbe {
 }
 
 impl Microbe {
-    fn new(x: f32, y: f32, rotation: f32, script: String, color: Color32) -> Self {
+    fn new(x: f32, y: f32, rotation: f32, script_id: Uuid, color: Color32) -> Self {
         Self {
             id: Uuid::new_v4(),
             lineage: Uuid::new_v4(),
             transform: Transform::new(x, y, rotation),
-            script,
+            script_id,
             energy: HEALTH,
             color,
         }
@@ -122,11 +122,11 @@ impl Microbe {
 
         // Update position based on controls
         if controls.forward {
-            // self.energy -= 1;
+            self.energy -= ACTION_ENERGY_CONSUMPTION;
             self.transform.position.x += self.transform.rotation.cos() * speed;
             self.transform.position.y += self.transform.rotation.sin() * speed;
         } else if controls.back {
-            // self.energy -= 1;
+            self.energy -= ACTION_ENERGY_CONSUMPTION;
             self.transform.position.x -= self.transform.rotation.cos() * speed;
             self.transform.position.y -= self.transform.rotation.sin() * speed;
         }
@@ -141,7 +141,7 @@ impl Microbe {
         }
 
         if controls.eat {
-            self.energy -= 0.1;
+            self.energy -= ACTION_ENERGY_CONSUMPTION;
         }
 
         self.transform.rotation %= 2.0 * PI;
@@ -150,14 +150,16 @@ impl Microbe {
 
 const HEALTH: f32 = 100.;
 const SPEED: f32 = 2.;
-const ROTATION_SPEED: f32 = 0.5;
-const DETECT_RANGE_FAR: f32 = 75.;
+const ROTATION_SPEED: f32 = 1.;
+const DETECT_RANGE_FAR: f32 = 40.;
 const DETECT_RANGE_CLOSE: f32 = 10.;
-const EAT_DAMAGE: f32 = 10.;
+const EAT_DAMAGE: f32 = 30.;
+const ACTION_ENERGY_CONSUMPTION: f32 = 0.001;
 
 #[derive(Debug)]
 struct World {
     microbes: QuadTree<Microbe>,
+    scripts: HashMap<Uuid, String>,
     engine: Engine,
     time: f32,
 }
@@ -174,6 +176,7 @@ impl World {
                 Rect::new(-BOX_SIZE, -BOX_SIZE, BOX_SIZE * 2., BOX_SIZE * 2.),
                 10,
             ),
+            scripts: HashMap::new(),
             engine,
             time: 0.0,
         })
@@ -184,10 +187,10 @@ impl World {
         x: f32,
         y: f32,
         rotation: f32,
-        script: String,
+        script_id: Uuid,
         color: Color32,
     ) -> Uuid {
-        let microbe = Microbe::new(x, y, rotation, script, color);
+        let microbe = Microbe::new(x, y, rotation, script_id, color);
         let id = microbe.id;
         self.microbes.insert(microbe);
         id
@@ -213,7 +216,7 @@ impl World {
             let close_range = DETECT_RANGE_CLOSE;
             let far_range = DETECT_RANGE_FAR;
 
-            let microbes_forward_items = World::get_nearby_microbes(
+            let microbes_front_microbes_close = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
                 microbe.lineage,
@@ -221,7 +224,7 @@ impl World {
                 transform.rotation,
                 close_range,
             );
-            let microbes_forward_close = microbes_forward_items.len() as i64;
+            let sense_front_close = microbes_front_microbes_close.len() as i64;
             let microbes_left_close = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
@@ -231,7 +234,7 @@ impl World {
                 close_range,
             )
             .len() as i64;
-            let microbes_right_close = World::get_nearby_microbes(
+            let sense_right_close = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
                 microbe.lineage,
@@ -240,7 +243,7 @@ impl World {
                 close_range,
             )
             .len() as i64;
-            let microbes_backward_close = World::get_nearby_microbes(
+            let sense_back_close = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
                 microbe.lineage,
@@ -250,7 +253,7 @@ impl World {
             )
             .len() as i64;
 
-            let microbes_forward_far = World::get_nearby_microbes(
+            let sense_front = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
                 microbe.lineage,
@@ -259,7 +262,7 @@ impl World {
                 far_range,
             )
             .len() as i64;
-            let microbes_left_far = World::get_nearby_microbes(
+            let sense_left = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
                 microbe.lineage,
@@ -268,7 +271,7 @@ impl World {
                 far_range,
             )
             .len() as i64;
-            let microbes_right_far = World::get_nearby_microbes(
+            let sense_right = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
                 microbe.lineage,
@@ -277,7 +280,7 @@ impl World {
                 far_range,
             )
             .len() as i64;
-            let microbes_backward_far = World::get_nearby_microbes(
+            let sense_back = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
                 microbe.lineage,
@@ -288,47 +291,51 @@ impl World {
             .len() as i64;
 
             // dbg!(
-            //     &microbes_backward_far,
-            //     &microbes_forward_far,
-            //     &microbes_left_far,
-            //     &microbes_right_far
+            //     &sense_back,
+            //     &sense_front,
+            //     &sense_left,
+            //     &sense_right
             // );
 
-            let microbes_forward_close = move || microbes_forward_close;
+            let sense_front_close = move || sense_front_close;
             let microbes_left_close = move || microbes_left_close;
-            let microbes_right_close = move || microbes_right_close;
-            let microbes_backward_close = move || microbes_backward_close;
+            let sense_right_close = move || sense_right_close;
+            let sense_back_close = move || sense_back_close;
 
-            let microbes_forward_far = move || microbes_forward_far;
-            let microbes_left_far = move || microbes_left_far;
-            let microbes_right_far = move || microbes_right_far;
-            let microbes_backward_far = move || microbes_backward_far;
+            let sense_front = move || sense_front;
+            let sense_left = move || sense_left;
+            let sense_right = move || sense_right;
+            let sense_back = move || sense_back;
+
+            let energy = microbe.energy;
+            let energy = move || energy;
 
             self.engine
-                .register_fn("microbes_forward_close", microbes_forward_close);
+                .register_fn("sense_front_close", sense_front_close);
             self.engine
                 .register_fn("microbes_left_close", microbes_left_close);
             self.engine
-                .register_fn("microbes_right_close", microbes_right_close);
+                .register_fn("sense_right_close", sense_right_close);
             self.engine
-                .register_fn("microbes_backward_close", microbes_backward_close);
+                .register_fn("sense_back_close", sense_back_close);
 
-            self.engine
-                .register_fn("microbes_forward_far", microbes_forward_far);
-            self.engine
-                .register_fn("microbes_left_far", microbes_left_far);
-            self.engine
-                .register_fn("microbes_right_far", microbes_right_far);
-            self.engine
-                .register_fn("microbes_backward_far", microbes_backward_far);
+            self.engine.register_fn("sense_front", sense_front);
+            self.engine.register_fn("sense_left", sense_left);
+            self.engine.register_fn("sense_right", sense_right);
+            self.engine.register_fn("sense_back", sense_back);
 
-            let controls = self.engine.eval::<Controls>(&microbe.script).expect("msg");
+            self.engine.register_fn("energy", energy);
+
+            let controls = self
+                .engine
+                .eval::<Controls>(self.scripts.get(&microbe.script_id).unwrap())
+                .expect("msg");
 
             microbe_controls.insert(
                 microbe.id,
                 (
                     controls,
-                    microbes_forward_items.iter().map(|i| i.id).collect(),
+                    microbes_front_microbes_close.iter().map(|i| i.id).collect(),
                 ),
             );
         }
@@ -376,12 +383,20 @@ impl World {
                 microbe.energy -= HEALTH;
                 let mut child = microbe.clone();
                 child.id = Uuid::new_v4();
-                child.energy = HEALTH / 2.;
+                child.energy = HEALTH * 0.25;
                 result.insert(child.clone());
-                // let mut child = microbe.clone();
-                // child.id = Uuid::new_v4();
-                // child.energy = 5;
-                // result.insert(child.clone());
+                let mut child = microbe.clone();
+                child.id = Uuid::new_v4();
+                child.energy = HEALTH * 0.25;
+                result.insert(child.clone());
+                let mut child = microbe.clone();
+                child.id = Uuid::new_v4();
+                child.energy = HEALTH * 0.25;
+                result.insert(child.clone());
+                let mut child = microbe.clone();
+                child.id = Uuid::new_v4();
+                child.energy = HEALTH * 0.25;
+                result.insert(child.clone());
             }
             if microbe.energy > 0. {
                 // DEATH
@@ -433,13 +448,19 @@ fn main() -> eframe::Result {
     let mut world = World::new().unwrap();
 
     let mut rng = rand::thread_rng();
+    let random_script_id = Uuid::new_v4();
+    world.scripts.insert(random_script_id, random_script());
+    let hunter_script_id = Uuid::new_v4();
+    world
+        .scripts
+        .insert(hunter_script_id, aggressive_hunter_script());
     for _ in 0..1000 {
-        if rng.gen_bool(0.01) {
+        if rng.gen_bool(0.1) {
             world.add_microbe(
                 rng.gen_range(-BOX_SIZE..BOX_SIZE),
                 rng.gen_range(-BOX_SIZE..BOX_SIZE),
                 rng.gen_range(0.0..=(2. * PI)),
-                random_script(),
+                random_script_id,
                 Color32::from_rgb(
                     rng.gen_range(0..=255),
                     rng.gen_range(0..=255),
@@ -451,7 +472,7 @@ fn main() -> eframe::Result {
                 rng.gen_range(-BOX_SIZE..BOX_SIZE),
                 rng.gen_range(-BOX_SIZE..BOX_SIZE),
                 rng.gen_range(0.0..=(2. * PI)),
-                aggressive_hunter_script(),
+                hunter_script_id,
                 Color32::from_rgb(
                     rng.gen_range(0..=255),
                     rng.gen_range(0..=255),
@@ -461,7 +482,12 @@ fn main() -> eframe::Result {
         }
     }
 
-    let native_options = eframe::NativeOptions::default();
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([BOX_SIZE * 2., BOX_SIZE * 2.])
+            .with_min_inner_size([BOX_SIZE * 2., BOX_SIZE * 2.]),
+        ..Default::default()
+    };
     eframe::run_native(
         "Game Visualization",
         native_options,
@@ -470,16 +496,41 @@ fn main() -> eframe::Result {
     Ok(())
 }
 
+// Create & modify a `Contols` object to return to the application
+// All actions besides turning cost a small amount of energy
+// let controls = new_controls();
+// controls.forward = true;
+// controls.left = true;
+// controls.right = true;
+// controls.back = true;
+// controls.eat = true;
+//
+// Returns the # of enemy microbes in range, in all 4 directions
+// let front_far = sense_front();
+// let left_far = sense_left();
+// let right_far = sense_right();
+// let back_far = sense_back();
+//
+// Returns the # of enemy microbes within attack range, in all 4 directions
+// (You can only attack microbes in front of you)
+// let front = sense_front_close();
+// let left = sense_left_close();
+// let right = sense_right_close();
+// let back = sense_back_close();
+//
+// Returns your current energy amount
+// let my_energy = energy();
+
 // Aggressive hunter that directly chases the nearest microbe
 fn aggressive_hunter_script() -> String {
     r#"
         let controls = new_controls();
 
         // Check all directions for closest target
-        let front_far = microbes_forward_far();
-        let left_far = microbes_left_far();
-        let right_far = microbes_right_far();
-        let back_far = microbes_backward_far();
+        let front_far = sense_front();
+        let left_far = sense_left();
+        let right_far = sense_right();
+        let back_far = sense_back();
 
         // Periodically turn to search
         if rand(0..=100) > 95 {
@@ -504,7 +555,7 @@ fn aggressive_hunter_script() -> String {
             controls.forward = true;
         }
 
-        if microbes_forward_close() > 0 {
+        if sense_front_close() > 0 {
             controls.eat = true;
         }
 
@@ -559,7 +610,7 @@ mod tests {
                     position: Vector2 { x: 1.0, y: 0.0 },
                     rotation: 0.0,
                 },
-                script: String::from("Test"),
+                script_id: Uuid::new_v4(),
                 energy: 100.,
                 color: Color32::WHITE,
             },
@@ -576,7 +627,7 @@ mod tests {
                     position: Vector2 { x: -1.0, y: 0.0 },
                     rotation: 0.0,
                 },
-                script: String::from("Test"),
+                script_id: Uuid::new_v4(),
                 energy: 100.,
                 color: Color32::WHITE,
             },
@@ -593,7 +644,7 @@ mod tests {
                     position: Vector2 { x: 0.0, y: 1.0 },
                     rotation: 0.0,
                 },
-                script: String::from("Test"),
+                script_id: Uuid::new_v4(),
                 energy: 100.,
                 color: Color32::WHITE,
             },
@@ -606,12 +657,11 @@ mod tests {
             Microbe {
                 id: Uuid::new_v4(),
                 lineage: Uuid::new_v4(),
-
                 transform: Transform {
                     position: Vector2 { x: 0.0, y: -1.0 },
                     rotation: 0.0,
                 },
-                script: String::from("Test"),
+                script_id: Uuid::new_v4(),
                 energy: 100.,
                 color: Color32::WHITE,
             },
