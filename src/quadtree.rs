@@ -122,15 +122,27 @@ impl<T: Locatable> QuadTreeNode<T> {
         None
     }
 
-    fn items(&self) -> Vec<&T> {
+    fn take_items(&mut self) -> Vec<T> {
         let mut found_items = Vec::new();
-        found_items.extend(self.items.iter());
+        if let Some(ref mut children) = self.children {
+            found_items = children.iter_mut().fold(found_items, |mut acc, c| {
+                acc.extend(c.take_items());
+                acc
+            });
+        }
+        found_items.append(&mut self.items);
+        found_items
+    }
+
+    fn items(&self) -> Vec<&T> {
+        let mut found_items = Vec::<&T>::new();
         if let Some(ref children) = self.children {
             found_items = children.iter().fold(found_items, |mut acc, c| {
                 acc.extend(c.items());
                 acc
             });
         }
+        found_items.extend(self.items.iter());
         found_items
     }
 
@@ -171,6 +183,10 @@ impl<T: Locatable> QuadTree<T> {
 
     pub fn insert(&mut self, data: T) -> bool {
         self.root.insert(data).is_none()
+    }
+
+    pub fn take_items(&mut self) -> Vec<T> {
+        self.root.take_items()
     }
 
     pub fn items(&self) -> Vec<&T> {
