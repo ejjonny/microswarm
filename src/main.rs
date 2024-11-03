@@ -1,3 +1,4 @@
+use egui::Color32;
 use quadtree::{Locatable, Point, QuadTree, Rect};
 use rand::Rng;
 use rhai::packages::Package; // needed for 'Package' trait
@@ -48,8 +49,8 @@ impl eframe::App for World {
                     microbe.transform.position.x + BOX_SIZE + 10.,
                     microbe.transform.position.y + BOX_SIZE + 10.,
                 );
-                let size = (microbe.energy as f32 / (HEALTH * 10) as f32) + 1.;
-                painter.circle_filled(player_pos, size, egui::Color32::WHITE);
+                let size = (microbe.energy / (HEALTH * 2.)) + 1.;
+                painter.circle_filled(player_pos, size, microbe.color);
 
                 let direction = egui::vec2(
                     microbe.transform.rotation.cos(),
@@ -58,7 +59,7 @@ impl eframe::App for World {
                 let line_end = player_pos + direction * size;
                 painter.line_segment(
                     [player_pos, line_end],
-                    egui::Stroke::new(2.0, egui::Color32::RED),
+                    egui::Stroke::new(1.0, egui::Color32::RED),
                 );
             }
         });
@@ -90,9 +91,11 @@ impl Transform {
 #[derive(Debug, Clone, PartialEq)]
 struct Microbe {
     id: Uuid,
+    lineage: Uuid,
     transform: Transform,
     script: String,
-    energy: i32,
+    energy: f32,
+    color: Color32,
 }
 
 impl Locatable for Microbe {
@@ -102,12 +105,14 @@ impl Locatable for Microbe {
 }
 
 impl Microbe {
-    fn new(x: f32, y: f32, rotation: f32, script: String) -> Self {
+    fn new(x: f32, y: f32, rotation: f32, script: String, color: Color32) -> Self {
         Self {
             id: Uuid::new_v4(),
+            lineage: Uuid::new_v4(),
             transform: Transform::new(x, y, rotation),
             script,
             energy: HEALTH,
+            color,
         }
     }
 
@@ -136,18 +141,19 @@ impl Microbe {
         }
 
         if controls.eat {
-            self.energy -= 1;
+            self.energy -= 0.1;
         }
 
         self.transform.rotation %= 2.0 * PI;
     }
 }
 
-const HEALTH: i32 = 100;
-const SPEED: f32 = 6.;
+const HEALTH: f32 = 100.;
+const SPEED: f32 = 2.;
 const ROTATION_SPEED: f32 = 0.5;
-const DETECT_RANGE_FAR: f32 = 200.;
-const DETECT_RANGE_CLOSE: f32 = 50.;
+const DETECT_RANGE_FAR: f32 = 75.;
+const DETECT_RANGE_CLOSE: f32 = 10.;
+const EAT_DAMAGE: f32 = 10.;
 
 #[derive(Debug)]
 struct World {
@@ -173,8 +179,15 @@ impl World {
         })
     }
 
-    fn add_microbe(&mut self, x: f32, y: f32, rotation: f32, script: String) -> Uuid {
-        let microbe = Microbe::new(x, y, rotation, script);
+    fn add_microbe(
+        &mut self,
+        x: f32,
+        y: f32,
+        rotation: f32,
+        script: String,
+        color: Color32,
+    ) -> Uuid {
+        let microbe = Microbe::new(x, y, rotation, script, color);
         let id = microbe.id;
         self.microbes.insert(microbe);
         id
@@ -203,6 +216,7 @@ impl World {
             let microbes_forward_items = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
+                microbe.lineage,
                 transform.position,
                 transform.rotation,
                 close_range,
@@ -211,6 +225,7 @@ impl World {
             let microbes_left_close = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
+                microbe.lineage,
                 transform.position,
                 transform.rotation - (PI * 0.5),
                 close_range,
@@ -219,6 +234,7 @@ impl World {
             let microbes_right_close = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
+                microbe.lineage,
                 transform.position,
                 transform.rotation + (PI * 0.5),
                 close_range,
@@ -227,6 +243,7 @@ impl World {
             let microbes_backward_close = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
+                microbe.lineage,
                 transform.position,
                 transform.rotation + PI,
                 close_range,
@@ -236,6 +253,7 @@ impl World {
             let microbes_forward_far = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
+                microbe.lineage,
                 transform.position,
                 transform.rotation,
                 far_range,
@@ -244,6 +262,7 @@ impl World {
             let microbes_left_far = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
+                microbe.lineage,
                 transform.position,
                 transform.rotation - (PI * 0.5),
                 far_range,
@@ -252,6 +271,7 @@ impl World {
             let microbes_right_far = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
+                microbe.lineage,
                 transform.position,
                 transform.rotation + (PI * 0.5),
                 far_range,
@@ -260,6 +280,7 @@ impl World {
             let microbes_backward_far = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
+                microbe.lineage,
                 transform.position,
                 transform.rotation + PI,
                 far_range,
@@ -343,17 +364,26 @@ impl World {
             microbe.transform.position.x = microbe.transform.position.x.clamp(-BOX_SIZE, BOX_SIZE);
             microbe.transform.position.y = microbe.transform.position.y.clamp(-BOX_SIZE, BOX_SIZE);
 
-            if let Some(ate_amount) = ate.get(&microbe.id) {
-                microbe.energy += ate_amount * 100
+            if let Some(_ate_amount) = ate.get(&microbe.id) {
+                // microbe.energy += *ate_amount as f32 * EAT_DAMAGE
+                microbe.energy += EAT_DAMAGE;
             }
             if let Some(eaten_amount) = eaten.get(&microbe.id) {
-                microbe.energy -= eaten_amount * 100
+                microbe.energy -= *eaten_amount as f32 * EAT_DAMAGE
             }
-            if microbe.energy >= 200 {
+            if microbe.energy >= HEALTH + HEALTH {
                 // PROCREATE
-                result.insert(microbe.clone());
+                microbe.energy -= HEALTH;
+                let mut child = microbe.clone();
+                child.id = Uuid::new_v4();
+                child.energy = HEALTH / 2.;
+                result.insert(child.clone());
+                // let mut child = microbe.clone();
+                // child.id = Uuid::new_v4();
+                // child.energy = 5;
+                // result.insert(child.clone());
             }
-            if microbe.energy > 0 {
+            if microbe.energy > 0. {
                 // DEATH
                 result.insert(microbe);
             }
@@ -365,6 +395,7 @@ impl World {
     fn get_nearby_microbes(
         microbes: &QuadTree<Microbe>,
         id: Uuid,
+        lineage: Uuid,
         position: Vector2,
         angle: f32,
         range: f32,
@@ -378,7 +409,7 @@ impl World {
             ))
             .into_iter()
             .filter(|m| {
-                if id == m.id {
+                if id == m.id || lineage == m.lineage {
                     return false;
                 }
                 let dx = m.transform.position.x - position.x;
@@ -402,13 +433,18 @@ fn main() -> eframe::Result {
     let mut world = World::new().unwrap();
 
     let mut rng = rand::thread_rng();
-    for _ in 0..200 {
+    for _ in 0..1000 {
         if rng.gen_bool(0.01) {
             world.add_microbe(
                 rng.gen_range(-BOX_SIZE..BOX_SIZE),
                 rng.gen_range(-BOX_SIZE..BOX_SIZE),
                 rng.gen_range(0.0..=(2. * PI)),
                 random_script(),
+                Color32::from_rgb(
+                    rng.gen_range(0..=255),
+                    rng.gen_range(0..=255),
+                    rng.gen_range(0..=255),
+                ),
             );
         } else {
             world.add_microbe(
@@ -416,6 +452,11 @@ fn main() -> eframe::Result {
                 rng.gen_range(-BOX_SIZE..BOX_SIZE),
                 rng.gen_range(0.0..=(2. * PI)),
                 aggressive_hunter_script(),
+                Color32::from_rgb(
+                    rng.gen_range(0..=255),
+                    rng.gen_range(0..=255),
+                    rng.gen_range(0..=255),
+                ),
             );
         }
     }
@@ -501,8 +542,11 @@ mod tests {
             let position = Vector2 { x: 0.0, y: 0.0 };
             let range = 10.0;
             let id = Uuid::new_v4();
+            let lineage = Uuid::new_v4();
             ms.insert(m.clone());
-            assert!(World::get_nearby_microbes(ms, id, position, angle, range).contains(&&m));
+            assert!(
+                World::get_nearby_microbes(ms, id, lineage, position, angle, range).contains(&&m)
+            );
         }
 
         // FORWARD
@@ -510,12 +554,14 @@ mod tests {
             0.,
             Microbe {
                 id: Uuid::new_v4(),
+                lineage: Uuid::new_v4(),
                 transform: Transform {
                     position: Vector2 { x: 1.0, y: 0.0 },
                     rotation: 0.0,
                 },
                 script: String::from("Test"),
-                energy: 100,
+                energy: 100.,
+                color: Color32::WHITE,
             },
             &mut microbes,
         );
@@ -525,12 +571,14 @@ mod tests {
             PI,
             Microbe {
                 id: Uuid::new_v4(),
+                lineage: Uuid::new_v4(),
                 transform: Transform {
                     position: Vector2 { x: -1.0, y: 0.0 },
                     rotation: 0.0,
                 },
                 script: String::from("Test"),
-                energy: 100,
+                energy: 100.,
+                color: Color32::WHITE,
             },
             &mut microbes,
         );
@@ -540,12 +588,14 @@ mod tests {
             PI * 0.5,
             Microbe {
                 id: Uuid::new_v4(),
+                lineage: Uuid::new_v4(),
                 transform: Transform {
                     position: Vector2 { x: 0.0, y: 1.0 },
                     rotation: 0.0,
                 },
                 script: String::from("Test"),
-                energy: 100,
+                energy: 100.,
+                color: Color32::WHITE,
             },
             &mut microbes,
         );
@@ -555,12 +605,15 @@ mod tests {
             -PI * 0.5,
             Microbe {
                 id: Uuid::new_v4(),
+                lineage: Uuid::new_v4(),
+
                 transform: Transform {
                     position: Vector2 { x: 0.0, y: -1.0 },
                     rotation: 0.0,
                 },
                 script: String::from("Test"),
-                energy: 100,
+                energy: 100.,
+                color: Color32::WHITE,
             },
             &mut microbes,
         );
