@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 mod quadtree;
 
-const BOX_SIZE: f32 = 300.;
+const BOX_SIZE: f32 = 400.;
 
 #[derive(Debug, Clone, CustomType)]
 #[rhai_type(extra = Self::build_extra)]
@@ -49,7 +49,7 @@ impl eframe::App for World {
                     microbe.transform.position.x + BOX_SIZE,
                     microbe.transform.position.y + BOX_SIZE,
                 );
-                let size = (microbe.energy / (HEALTH * 2.)) + 1.;
+                let size = (microbe.energy / (HEALTH)) + 1.;
                 painter.circle_filled(player_pos, size, microbe.color);
 
                 let direction = egui::vec2(
@@ -119,14 +119,15 @@ impl Microbe {
     fn update(&mut self, controls: &Controls, _delta_time: f32) {
         // Apply controls to movement
         let speed = SPEED;
+        self.energy -= ACTION_ENERGY_CONSUMPTION;
 
         // Update position based on controls
         if controls.forward {
-            self.energy -= ACTION_ENERGY_CONSUMPTION;
+            // self.energy -= ACTION_ENERGY_CONSUMPTION;
             self.transform.position.x += self.transform.rotation.cos() * speed;
             self.transform.position.y += self.transform.rotation.sin() * speed;
         } else if controls.back {
-            self.energy -= ACTION_ENERGY_CONSUMPTION;
+            // self.energy -= ACTION_ENERGY_CONSUMPTION;
             self.transform.position.x -= self.transform.rotation.cos() * speed;
             self.transform.position.y -= self.transform.rotation.sin() * speed;
         }
@@ -149,7 +150,7 @@ impl Microbe {
 }
 
 const HEALTH: f32 = 100.;
-const SPEED: f32 = 2.;
+const SPEED: f32 = 1.5;
 const ROTATION_SPEED: f32 = 1.;
 const DETECT_RANGE_FAR: f32 = 40.;
 const DETECT_RANGE_CLOSE: f32 = 10.;
@@ -225,7 +226,7 @@ impl World {
                 close_range,
             );
             let sense_front_close = microbes_front_microbes_close.len() as i64;
-            let microbes_left_close = World::get_nearby_microbes(
+            let sense_left_close = World::get_nearby_microbes(
                 &frozen,
                 microbe.id,
                 microbe.lineage,
@@ -298,7 +299,7 @@ impl World {
             // );
 
             let sense_front_close = move || sense_front_close;
-            let microbes_left_close = move || microbes_left_close;
+            let sense_left_close = move || sense_left_close;
             let sense_right_close = move || sense_right_close;
             let sense_back_close = move || sense_back_close;
 
@@ -313,7 +314,7 @@ impl World {
             self.engine
                 .register_fn("sense_front_close", sense_front_close);
             self.engine
-                .register_fn("microbes_left_close", microbes_left_close);
+                .register_fn("sense_left_close", sense_left_close);
             self.engine
                 .register_fn("sense_right_close", sense_right_close);
             self.engine
@@ -454,17 +455,36 @@ fn main() -> eframe::Result {
     world
         .scripts
         .insert(hunter_script_id, aggressive_hunter_script());
-    for _ in 0..1000 {
-        if rng.gen_bool(0.1) {
+    let script_b = Uuid::new_v4();
+    world.scripts.insert(script_b, vampire_microbe_script());
+    let script_c = Uuid::new_v4();
+    world.scripts.insert(script_c, timid_herbivore_script());
+    for _ in 0..500 {
+        if rng.gen_bool(0.5) {
             world.add_microbe(
                 rng.gen_range(-BOX_SIZE..BOX_SIZE),
                 rng.gen_range(-BOX_SIZE..BOX_SIZE),
                 rng.gen_range(0.0..=(2. * PI)),
-                random_script_id,
+                script_b,
                 Color32::from_rgb(
+                    100,
+                    // 100,
+                    // rng.gen_range(0..=255),
                     rng.gen_range(0..=255),
                     rng.gen_range(0..=255),
-                    rng.gen_range(0..=255),
+                ),
+            );
+        } else if rng.gen_bool(0.5) {
+            world.add_microbe(
+                rng.gen_range(-BOX_SIZE..BOX_SIZE),
+                rng.gen_range(-BOX_SIZE..BOX_SIZE),
+                rng.gen_range(0.0..=(2. * PI)),
+                script_c,
+                Color32::from_rgb(
+                    255,
+                    rng.gen_range(0..=50),
+                    // rng.gen_range(0..=255),
+                    rng.gen_range(0..=50),
                 ),
             );
         } else {
@@ -475,7 +495,8 @@ fn main() -> eframe::Result {
                 hunter_script_id,
                 Color32::from_rgb(
                     rng.gen_range(0..=255),
-                    rng.gen_range(0..=255),
+                    255,
+                    // rng.gen_range(0..=255),
                     rng.gen_range(0..=255),
                 ),
             );
@@ -518,7 +539,7 @@ fn main() -> eframe::Result {
 // let right = sense_right_close();
 // let back = sense_back_close();
 //
-// Returns your current energy amount
+// Returns your current energy amount, you must eat to survive!
 // let my_energy = energy();
 
 // Aggressive hunter that directly chases the nearest microbe
@@ -557,6 +578,138 @@ fn aggressive_hunter_script() -> String {
 
         if sense_front_close() > 0 {
             controls.eat = true;
+        }
+
+        return controls;
+    "#
+    .to_string()
+}
+
+fn vampire_microbe_script() -> String {
+    r#"
+        let controls = new_controls();
+        let energy = energy();
+
+        // Sensing at different ranges
+        let front_far = sense_front();
+        let front_close = sense_front_close();
+        let left_far = sense_left();
+        let right_far = sense_right();
+        let left_close = sense_left_close();
+        let right_close = sense_right_close();
+
+        // Energy conservation mode when low
+        if energy < 30 {
+            // If prey is right in front, still take the opportunity
+            if front_close > 0 {
+                controls.eat = true;
+                return controls;
+            }
+
+            // Otherwise minimize movement and wait for energy regeneration
+            if front_far > 0 || left_far > 0 || right_far > 0 {
+                controls.back = true;
+                return controls;
+            }
+
+            // Occasional random movement to avoid getting stuck
+            if rand(0..=100) > 95 {
+                controls.forward = true;
+            }
+            return controls;
+        }
+
+        // Hunting mode when energy is sufficient
+        if front_close > 0 {
+            // Attack if prey is in range
+            controls.eat = true;
+        } else if front_far > 0 {
+            // Stalk prey that's further away
+            controls.forward = true;
+        } else if left_close > 0 || left_far > 0 {
+            // Turn towards nearby prey
+            controls.left = true;
+            if left_close == 0 {  // If not too close, move forward while turning
+                controls.forward = true;
+            }
+        } else if right_close > 0 || right_far > 0 {
+            // Turn towards nearby prey
+            controls.right = true;
+            if right_close == 0 {  // If not too close, move forward while turning
+                controls.forward = true;
+            }
+        } else {
+            // Search pattern when no prey is detected
+            controls.forward = true;
+            if rand(0..=100) > 92 {
+                if rand(0..=1) > 0.5 {
+                    controls.left = true;
+                } else {
+                    controls.right = true;
+                }
+            }
+        }
+
+        return controls;
+    "#
+    .to_string()
+}
+
+fn timid_herbivore_script() -> String {
+    r#"
+        let controls = new_controls();
+
+        // Detect threats
+        let front_far = sense_front();
+        let left_far = sense_left();
+        let right_far = sense_right();
+        let back_far = sense_back();
+
+        // Check for food in eating range
+        let front_close = sense_front_close();
+
+        // Run away if any threats are detected
+        if front_far > 0 || front_close > 0 {
+            controls.back = true;
+            // Pick random direction to flee
+            if rand(0..=1) > 0.5 {
+                controls.left = true;
+            } else {
+                controls.right = true;
+            }
+            return controls;
+        }
+
+        if left_far > 0 {
+            controls.right = true;
+            controls.forward = true;
+            return controls;
+        }
+
+        if right_far > 0 {
+            controls.left = true;
+            controls.forward = true;
+            return controls;
+        }
+
+        // If something is directly in front, try to eat it
+        // (game will only let us eat valid food)
+        if front_close > 0 {
+            controls.eat = true;
+            return controls;
+        }
+
+        // When no threats, occasionally move to find food
+        if rand(0..=100) > 80 {
+            controls.forward = true;
+            // Sometimes turn while moving
+            if rand(0..=100) > 70 {
+                if rand(0..=1) > 0.5 {
+                    controls.left = true;
+                } else {
+                    controls.right = true;
+                }
+            }
         }
 
         return controls;
